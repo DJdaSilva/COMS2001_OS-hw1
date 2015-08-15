@@ -43,7 +43,7 @@ fun_desc_t cmd_table[] = {
 };
 
 int cmd_chDir(tok_t arg[]){
-  int res = chdir(arg[0]);
+  chdir(arg[0]);
   return 1;
 }
 
@@ -109,7 +109,15 @@ process* create_process(char* inputString)
   return NULL;
 }
 
-
+void startProcess(char* path, char** argv){
+ pid_t pid = fork();
+      if (pid == 0) {
+       execvp(path, argv);
+       exit(127);
+      }
+      else waitpid(pid,0,0);
+ return 0;
+}
 
 int shell (int argc, char *argv[]) {
   char *s = malloc(INPUT_STRING_SIZE+1);			/* user input string */
@@ -131,10 +139,12 @@ int shell (int argc, char *argv[]) {
     fundex = lookup(t[0]); /* Is first token a shell literal */
     if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
     else {
-      fprintf(stdout, "This shell only supports built-ins. Replace this to run programs as commands.\n");
+      startProcess(t[0], t);
     }
     cwd = getcwd(buf, PATH_MAX);
     fprintf(stdout, "%s: ", cwd);
   }
   return 0;
 }
+
+
