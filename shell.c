@@ -109,25 +109,45 @@ process* create_process(char* inputString)
   return NULL;
 }
 
-void startProcess(char* path, char** argv){
+int startProcess(char* path, char** argv){
  pid_t pid = fork();
       if (pid == 0) {
-       execvp(path, argv);
-       exit(127);
+       execv(path, argv);
+       exit(-1);
       }
-      else waitpid(pid,0,0);
+      else if (pid == -1) {
+             return -1;
+           }
+           else waitpid(pid,0,0);
  return 0;
 }
 
+int contains(char* in, char ref){
+  int k;
+  while (in[k] != '\0') {
+   fprintf(stdin, "%c\n", in[k]);
+   if (in[k] == ref) return 1;
+   k++;
+  }
+  return 0;
+}
+
+
+
 int shell (int argc, char *argv[]) {
   char *s = malloc(INPUT_STRING_SIZE+1);			/* user input string */
-  tok_t *t;			/* tokens parsed from input */
+  tok_t *t;
+  tok_t *paths;			/* tokens parsed from input */
   int fundex = -1;
   pid_t pid = getpid();		/* get current processes PID */
   pid_t ppid = getppid();	/* get parents PID */
-  pid_t cpid, tcpid, cpgid;
   char *buf = NULL;
   char *cwd = getcwd(buf, PATH_MAX);
+  char *path = getenv("PATH");
+  char pathResolution[PATH_MAX];
+  int k = 0;
+  char *executable;
+  int isExecutable = 0;
 
   init_shell();
 
@@ -139,7 +159,32 @@ int shell (int argc, char *argv[]) {
     fundex = lookup(t[0]); /* Is first token a shell literal */
     if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
     else {
-      startProcess(t[0], t);
+      if (contains(t[0], '/') == 1) {
+	startProcess(t[0], t);
+      }
+      else {
+        executable = t[0];
+	paths = getToks(path);
+	
+	while ( (paths[k]!=NULL) && (isExecutable == 0)) {
+          strcpy(pathResolution, paths[k]);
+          strcat(pathResolution, "/");
+          strcat(pathResolution, executable);
+          
+          if (access(pathResolution, F_OK|X_OK) == 0)
+            {isExecutable = 1;}
+          k++;
+        }
+
+        if (isExecutable == 1) {
+          t[0] = pathResolution;
+          startProcess(pathResolution, t);
+        }
+	else {
+          fprintf(stdout, "Couldn't resolve path for executable '%s'.\n", executable);
+        }
+      }
+      
     }
     cwd = getcwd(buf, PATH_MAX);
     fprintf(stdout, "%s: ", cwd);
