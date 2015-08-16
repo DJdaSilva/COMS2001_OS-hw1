@@ -103,92 +103,105 @@ void add_process(process* p)
 /**
  * Creates a process given the inputString from stdin
  */
-process* create_process(char* inputString)
+process* create_process(char* path, char** argv)
 {
-  /** YOUR CODE HERE */
-  return NULL;
-}
+	pid_t pid = fork();
+	int i = 0;
 
-int startProcess(char* path, char** argv){
- pid_t pid = fork();
-      if (pid == 0) {
-       execv(path, argv);
-       exit(-1);
-      }
-      else if (pid == -1) {
-             return -1;
-           }
-           else waitpid(pid,0,0);
- return 0;
+	if (pid == 0) {
+		FILE *newInput, *newOutput;
+		int newStart = 0;
+		if ( strcmp(argv[1],">") == 0) {
+			newOutput = fopen(argv[2], "w");
+			dup2(fileno(newOutput), 1);
+			argv[2] = argv[0];
+			newStart = 2;
+		}
+		if ( strcmp(argv[1],"<") == 0) {
+			newInput = fopen(argv[2], "r");
+			dup2(fileno(newInput), 0);
+			argv[2] = argv[0];
+			newStart = 2;
+		}
+		execv(path, &argv[newStart]);
+		exit(-1);
+	}
+	else {
+		if (pid == -1) {
+			return NULL;
+		}
+		else waitpid(pid,0,0);
+	}
+	return NULL;
 }
 
 int contains(char* in, char ref){
-  int k;
-  while (in[k] != '\0') {
-   fprintf(stdin, "%c\n", in[k]);
-   if (in[k] == ref) return 1;
-   k++;
-  }
-  return 0;
+	int k;
+	while (in[k] != '\0') {
+		fprintf(stdin, "%c\n", in[k]);
+		if (in[k] == ref) return 1;
+		k++;
+	}
+	return 0;
 }
 
 
 
 int shell (int argc, char *argv[]) {
-  char *s = malloc(INPUT_STRING_SIZE+1);			/* user input string */
-  tok_t *t;
-  tok_t *paths;			/* tokens parsed from input */
-  int fundex = -1;
-  pid_t pid = getpid();		/* get current processes PID */
-  pid_t ppid = getppid();	/* get parents PID */
-  char *buf = NULL;
-  char *cwd = getcwd(buf, PATH_MAX);
-  char *path = getenv("PATH");
-  char pathResolution[PATH_MAX];
-  int k = 0;
-  char *executable;
-  int isExecutable = 0;
+	char *s = malloc(INPUT_STRING_SIZE+1);			/* user input string */
+	tok_t *t;
+	tok_t *paths;			/* tokens parsed from input */
+	int fundex = -1;
+	pid_t pid = getpid();		/* get current processes PID */
+	pid_t ppid = getppid();	/* get parents PID */
+	char *buf = NULL;
+	char *cwd = getcwd(buf, PATH_MAX);
+	char *path = getenv("PATH");
+	char pathResolution[PATH_MAX];
+	int k = 0;
+	char *executable;
+	int isExecutable = 0;
 
-  init_shell();
+	init_shell();
 
-  printf("%s running as PID %d under %d\n",argv[0],pid,ppid);
+	printf("%s running as PID %d under %d\n",argv[0],pid,ppid);
 
-  fprintf(stdout, "%s: ", cwd);
-  while ((s = freadln(stdin))){
-    t = getToks(s); /* break the line into tokens */
-    fundex = lookup(t[0]); /* Is first token a shell literal */
-    if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
-    else {
-      if (contains(t[0], '/') == 1) {
-	startProcess(t[0], t);
-      }
-      else {
-        executable = t[0];
-	paths = getToks(path);
+	fprintf(stdout, "%s: ", cwd);
+	while ((s = freadln(stdin))){
+		t = getToks(s); /* break the line into tokens */
+		fundex = lookup(t[0]); /* Is first token a shell literal */
+		if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
+		else {
+			if (contains(t[0], '/') == 1) {
+				create_process(t[0], t);
+			}
+			else {
+			        executable = t[0];
+				paths = getToks(path);
+		
+				while ( (paths[k]!=NULL) && (isExecutable == 0)) {
+					strcpy(pathResolution, paths[k]);
+					strcat(pathResolution, "/");
+					strcat(pathResolution, executable);
+        	  
+					if (access(pathResolution, F_OK|X_OK) == 0)
+						{isExecutable = 1;}
+					k++;
+				}
 	
-	while ( (paths[k]!=NULL) && (isExecutable == 0)) {
-          strcpy(pathResolution, paths[k]);
-          strcat(pathResolution, "/");
-          strcat(pathResolution, executable);
-          
-          if (access(pathResolution, F_OK|X_OK) == 0)
-            {isExecutable = 1;}
-          k++;
-        }
+				if (isExecutable == 1) {
+					t[0] = pathResolution;
+					create_process(pathResolution, t);
+				}
+				else {
+        	  			fprintf(stdout, "Couldn't resolve path for executable '%s'.\n", executable);
+				}
+			}
 
-        if (isExecutable == 1) {
-          t[0] = pathResolution;
-          startProcess(pathResolution, t);
-        }
-	else {
-          fprintf(stdout, "Couldn't resolve path for executable '%s'.\n", executable);
-        }
-      }
-      
-    }
-    cwd = getcwd(buf, PATH_MAX);
-    fprintf(stdout, "%s: ", cwd);
-  }
+		}
+		cwd = getcwd(buf, PATH_MAX);
+		fprintf(stdout, "%s: ", cwd);
+	}
   return 0;
 }
 
