@@ -8,12 +8,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <math.h>
+#include <signal.h>
 
 #define FALSE 0
 #define TRUE 1
 #define INPUT_STRING_SIZE 80
 #define PATH_MAX 80
-#define MAX_TABLE_WIDTH 40
+#define MAX_TABLE_WIDTH 60
 #define COLUMN 20
 
 #include "io.h"
@@ -76,20 +77,22 @@ int cmd_listProcs(tok_t arg[]) {
 	int k;
 	//Printing process structure
 	while (curr->next != NULL) {
-		fprintf(stdout, "|--------------------------------------|\n");
-		if ( (curr->next->completed == 'N') || (curr->next->stopped == 'N') )
-			{fprintf(stdout, "|Process number %2d (Inactive)          |\n", i);}
+		fprintf(stdout, "|----------------------------------------------------------|\n");
+		if ( (curr->next->completed == 'Y') || (curr->next->stopped == 'Y') )
+			{fprintf(stdout, "|Process number %2d (Inactive)                              |\n", i);}
 		else
-			{fprintf(stdout, "|Process number %2d (Active)            |\n", i);} 
-		fprintf(stdout, "|------------------+-------------------|\n");
+			{fprintf(stdout, "|Process number %2d (Active)                                |\n", i);} 
+		fprintf(stdout, "|------------------+---------------------------------------|\n");
 		fprintf(stdout, "|PID:              | %d%n", curr->next->pid, &printed);
 		fillLine( (MAX_TABLE_WIDTH-printed)-1 );
-			/* fprintf(stdout, "|Stdin:            | %d%n", curr->next->stdin, &printed);
+			/* --FOR PRINTING FILE DESCRIPTORS:--
+			fprintf(stdout, "|Stdin:            | %d%n", curr->next->stdin, &printed);
 			fillLine( (MAX_TABLE_WIDTH-printed)-1 );
 			fprintf(stdout, "|Stdout:           | %d%n", curr->next->stdout, &printed);
 			fillLine( (MAX_TABLE_WIDTH-printed)-1 );
 			fprintf(stdout, "|Stderr:           | %d%n", curr->next->stderr, &printed);
-			fillLine( (MAX_TABLE_WIDTH-printed)-1 );*/
+			fillLine( (MAX_TABLE_WIDTH-printed)-1 );
+			*/
 		fprintf(stdout, "|Completed:        | %c%n", curr->next->completed, &printed);
 		fillLine( (MAX_TABLE_WIDTH-printed)-1 );
 		fprintf(stdout, "|Stopped:          | %c%n", curr->next->stopped, &printed);
@@ -102,7 +105,7 @@ int cmd_listProcs(tok_t arg[]) {
 			fprintf(stdout, "|Arg number [%d]:   | %s%n", k, curr->next->argv[k], &printed);
 			fillLine( (MAX_TABLE_WIDTH-printed) - 1);
 		}
-		fprintf(stdout, "|------------------+-------------------|\n\n");
+		fprintf(stdout, "|------------------+---------------------------------------|\n\n");
 		curr = curr->next;
 		i++;
 	}
@@ -159,26 +162,25 @@ void init_shell()
   /** YOUR CODE HERE */
 }
 
-void add_process(process *p)
+//Recursive function to add process to linked list.
+void add_process(process *curr, process *p)
 {	
-	process *curr = first_process;
-	int i = 0;
-
-	while (curr->next != NULL) {
-		curr = curr->next;i++;
+	if (curr->next == NULL) {
+		curr->next = p;
+		p->prev = curr;
 	}
-	curr->next = p;
-	p->prev = curr;
+	else
+	{add_process(curr->next, p);}
 }
 
 process* create_process(char* path, char** argvIN)
 {
 	pid_t pid = fork();
 	process *foo;
-	int i = 0;
-	int k = 0;
-	char **copyargv;
+	int i;
 	FILE *newInput, *newOutput;
+	char** newargvIN = malloc(MAXTOKS*sizeof(char*));
+  		for (i=0; i<MAXTOKS; i++) newargvIN[i] = NULL;
 	int newStart = 0;
 	foo = malloc(sizeof(process));
 	//Setting standard file desc in process structure
@@ -186,36 +188,38 @@ process* create_process(char* path, char** argvIN)
 	foo->stdout = 1;
 	foo->stderr = 2;
 	
-
-	//IO redirection (and updating file desc) 
-	if ( strcmp(argvIN[1],">") == 0) {
-		newOutput = fopen(argvIN[2], "w");
-		dup2(fileno(newOutput), 1);
-		foo->stdout = fileno(newOutput);
-		argvIN[2] = argvIN[0];
-		newStart = 2;
-	}
-	if ( strcmp(argvIN[1],"<") == 0) {
-		newInput = fopen(argvIN[2], "r");
-		dup2(fileno(newInput), 0);
-		foo->stdin = fileno(newInput);
-		argvIN[2] = argvIN[0];
-		newStart = 2;
-	}
 	
-	//To give correct args to exec
-	i = newStart;
-	
+	//IO redirection (and updating file desc)
+	if (argvIN[1] != NULL) {
+		if ( strcmp(argvIN[1],">") == 0) {
+			if (pid == 0) {
+				newOutput = fopen(argvIN[2], "a");
+				dup2(fileno(newOutput), 1);
+			}
+			foo->stdout = fileno(newOutput);
+			argvIN[2] = argvIN[0];
+			newStart = 2;
+		}
+		if ( strcmp(argvIN[1],"<") == 0) {
+			if (pid == 0) {
+				newInput = fopen(argvIN[2], "r");
+				dup2(fileno(newInput), 0);
+			}
+			foo->stdin = fileno(newInput);
+			argvIN[2] = argvIN[0];
+			newStart = 2;
+		}
+	}
 	
 	if (pid == 0) {
-		execv(path, copyargv);
+		execv(path, &argvIN[newStart]);
 		exit(-1);
 	}
 	else {
 		if (pid == -1) {
-			
 			return NULL;
 		}
+
 		else {
 			//Building process structure
 			foo->argv = &argvIN[newStart];
@@ -226,53 +230,78 @@ process* create_process(char* path, char** argvIN)
 			foo->pid = pid;
 			foo->next = NULL;
 			foo->prev = NULL;
-			while (argvIN[i] != NULL) {
-				i++;
-			}
+			i = newStart;
+			while (argvIN[i] != NULL)
+				{i++;}
 			foo->argc = i - newStart;
-
-			//Printing process structure
-			fprintf(stdout, "PID: %d\n", foo->pid);
-			fprintf(stdout, "stdin: %d\n", foo->stdin);
-			fprintf(stdout, "stdout: %d\n", foo->stdout);
-			fprintf(stdout, "stderr: %d\n", foo->stderr);
-			fprintf(stdout, "arguments: %d\n", foo->argc);
-			
-			for (k = 0; k < foo->argc; k++) {
-				fprintf(stdout, "Arg number %d: %s\n", k, foo->argv[k]);
-			}
-
-			add_process(foo);
+			add_process(first_process, foo);
 			waitpid(pid,0,0);
 			foo->completed = 'Y';
-			
 		}	
 	}
-	return NULL;
+	return foo;
+}
+
+//Recursive function to kill process
+int killProcesses(process *curr, int signal) {
+	int count = 0;
+	if(curr->next != NULL) {
+		if ( (curr->next->completed == 'N') && (curr->next->stopped =='N') && (curr->next->background == 'N')) {
+			kill(curr->next->pid, signal);
+			curr->next->stopped = 'Y';
+			count++;
+		}
+		return count + killProcesses(curr->next, signal);
+	}
+	return 0;
+}
+
+
+static void handler(int signum) {
+	
+	if (signum == SIGINT)
+		{fprintf(stdout, "\n%d processes ended.\n", killProcesses(first_process, signum));}
+	else if (signum == SIGTSTP)
+		{fprintf(stdout, "\n%d processes stopped.\n", killProcesses(first_process, signum));}
+	
 }
 
 int shell (int argc, char *argv[]) {
-	char *s = malloc(INPUT_STRING_SIZE+1);			/* user input string */
-	tok_t *t;			/* tokens parsed from input */
+	char *s = malloc(INPUT_STRING_SIZE+1);	/* user input string */
+	tok_t *t;				/* tokens parsed from input */
 	int fundex = -1;
-	pid_t pid = getpid();		/* get current processes PID */
-	pid_t ppid = getppid();	/* get parents PID */
+	pid_t pid = getpid();			/* get current processes PID */
+	pid_t ppid = getppid();			/* get parents PID */
 	char *buf = NULL;
 	char *cwd = getcwd(buf, PATH_MAX);
 	char *path = getenv("PATH");
 	tok_t *paths = getToks(path);
-	char pathResolution[PATH_MAX];
+	
 	int k = 0;
 	int isExecutable;
+	struct sigaction sa;
+
+    	sa.sa_handler = handler;
+    	sigemptyset(&sa.sa_mask);
+    	sa.sa_flags = SA_RESTART;
+
 	first_process = malloc(sizeof(process));
 	first_process->next = NULL;
 	first_process->prev = NULL;
+
+    	if (sigaction(SIGINT, &sa, NULL) == -1)
+		{fprintf(stdout, "Failed to send request.");}
+	else if (sigaction(SIGTSTP, &sa, NULL) == -1)
+		{fprintf(stdout, "Failed to send request.");}
+
+	
 	init_shell();
 
 	printf("%s running as PID %d under %d\n",argv[0],pid,ppid);
 
 	fprintf(stdout, "%s: ", cwd);
 	while ((s = freadln(stdin))){
+		char *pathResolution = malloc(PATH_MAX*sizeof(char));
 		t = getToks(s); /* break the line into tokens */
 		fundex = lookup(t[0]); /* Is first token a shell literal */
 		if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
@@ -283,7 +312,7 @@ int shell (int argc, char *argv[]) {
 			else {					//executable with no path defined
 				k = 0;
 				isExecutable = 0;
-				while ( (paths[k]!=NULL) && (isExecutable == 0)) {
+				while ( (paths[k] != NULL) && (isExecutable == 0)) {
 					strcpy(pathResolution, paths[k]);
 					strcat(pathResolution, "/");
 					strcat(pathResolution, t[0]);
