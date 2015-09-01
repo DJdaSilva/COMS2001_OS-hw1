@@ -36,6 +36,8 @@ int cmd_chDir(tok_t arg[]);
 
 int cmd_listProcs(tok_t arg[]);
 
+int cmd_wait();
+
 char * toArray(int number) {
 	int n = log10(number) + 1;
 	int i;
@@ -67,8 +69,30 @@ fun_desc_t cmd_table[] = {
 	{cmd_help, "?", "show this help menu"},
 	{cmd_quit, "quit", "quit the command shell"},
 	{cmd_chDir, "cd", "change directory to argv"},
-	{cmd_listProcs, "listProcs", "list all processes started by this shell."}
+	{cmd_listProcs, "listProcs", "list all processes started by this shell"},
+	{cmd_wait, "wait", "wait until all background processes have completed"}
+	//{cmd_fg, "fg", "move process with pid given by argv to foreground"},
+	//{cmd_bg, "bg", "move process with pid given by argv to background"}
 };
+
+//Traverse linked list recursively, waiting for each process in bg to finish
+int waitForProcesses(process *curr) {
+	int count = 0;
+	if(curr->next != NULL) {
+		if ( (curr->next->completed == 'N') && (curr->next->stopped =='N') && (curr->next->background == 'Y')) {
+			waitpid(curr->next->pid, 0, 0);
+			curr->next->completed = 'Y';
+			count++;
+		}
+		return count + waitForProcesses(curr->next);
+	}
+	return 0;
+}
+
+int cmd_wait() {
+	fprintf(stdout, "%d background processes completed.\n", waitForProcesses(first_process));
+	return 1;
+}
 
 int cmd_listProcs(tok_t arg[]) {
 	process *curr = first_process;
@@ -162,6 +186,15 @@ void init_shell()
   /** YOUR CODE HERE */
 }
 
+void completionListener(process* foo) {
+	pid_t thispid = fork();
+	
+	if (thispid == 0) {
+		waitpid(foo->pid, 0, 0);
+		foo->completed = 'Y';
+	}
+}
+
 //Recursive function to add process to linked list.
 void add_process(process *curr, process *p)
 {	
@@ -175,7 +208,6 @@ void add_process(process *curr, process *p)
 
 process* create_process(char* path, char** argvIN)
 {
-	pid_t pid = fork();
 	process *foo;
 	int i;
 	FILE *newInput, *newOutput;
@@ -188,26 +220,32 @@ process* create_process(char* path, char** argvIN)
 	foo->stdout = 1;
 	foo->stderr = 2;
 	
-	
+	pid_t pid = fork();
 	//IO redirection (and updating file desc)
 	if (argvIN[1] != NULL) {
-		if ( strcmp(argvIN[1],">") == 0) {
+		if ( strcmp(argvIN[1],"&") == 0) {
+			foo->background = 'Y';
+			argvIN[newStart+1] = argvIN[0];
+			newStart++;
+		}
+		else foo->background = 'N';
+		if ( (argvIN[newStart+1] != NULL) && (strcmp(argvIN[newStart+1],">") == 0) ) {
 			if (pid == 0) {
-				newOutput = fopen(argvIN[2], "a");
+				newOutput = fopen(argvIN[newStart+2], "a");
 				dup2(fileno(newOutput), 1);
 			}
 			foo->stdout = fileno(newOutput);
-			argvIN[2] = argvIN[0];
-			newStart = 2;
+			argvIN[newStart+2] = argvIN[newStart];
+			newStart += 2;
 		}
-		if ( strcmp(argvIN[1],"<") == 0) {
+		if ( (argvIN[newStart+1] != NULL) && (strcmp(argvIN[newStart+1],"<") == 0) ) {
 			if (pid == 0) {
-				newInput = fopen(argvIN[2], "r");
+				newInput = fopen(argvIN[newStart+2], "r");
 				dup2(fileno(newInput), 0);
 			}
 			foo->stdin = fileno(newInput);
-			argvIN[2] = argvIN[0];
-			newStart = 2;
+			argvIN[newStart+2] = argvIN[newStart];
+			newStart += 2;
 		}
 	}
 	
@@ -225,7 +263,7 @@ process* create_process(char* path, char** argvIN)
 			foo->argv = &argvIN[newStart];
 			foo->completed = 'N';
 			foo->stopped = 'N';
-			foo->background = 'N';
+			if ((foo->background != 'N') && (foo->background != 'Y')) foo->background = 'Y';
 			foo->status = 1;
 			foo->pid = pid;
 			foo->next = NULL;
@@ -235,8 +273,11 @@ process* create_process(char* path, char** argvIN)
 				{i++;}
 			foo->argc = i - newStart;
 			add_process(first_process, foo);
-			waitpid(pid,0,0);
-			foo->completed = 'Y';
+			if (foo->background == 'N') {
+				waitpid(pid,0,0);
+				foo->completed = 'Y';
+			}
+			else completionListener(foo);
 		}	
 	}
 	return foo;
@@ -266,9 +307,29 @@ static void handler(int signum) {
 	
 }
 
+//Move all elements (starting at and including "index") right one index
+//Pretty elegant solution if I do say so myself....
+void shiftTokensRight(int index, tok_t *tokens) {
+	tok_t temp[2];
+	int i = index;
+	
+	temp[1] = tokens[i];
+	temp[0] = tokens[i+1];
+	i++;
+
+	while (tokens[i] != NULL) {
+		tokens[i] = temp[(i-1)%2];
+		temp[(i-1)%2] = tokens[i+1];
+		i++;
+	}
+	tokens[i] = temp[(i-1)%2];
+	tokens[index] = NULL;	
+}
+
 int shell (int argc, char *argv[]) {
 	char *s = malloc(INPUT_STRING_SIZE+1);	/* user input string */
-	tok_t *t;				/* tokens parsed from input */
+	tok_t *t;						/* tokens parsed from input */
+	
 	int fundex = -1;
 	pid_t pid = getpid();			/* get current processes PID */
 	pid_t ppid = getppid();			/* get parents PID */
@@ -276,9 +337,9 @@ int shell (int argc, char *argv[]) {
 	char *cwd = getcwd(buf, PATH_MAX);
 	char *path = getenv("PATH");
 	tok_t *paths = getToks(path);
-	
 	int k = 0;
 	int isExecutable;
+	int background;
 	struct sigaction sa;
 
     	sa.sa_handler = handler;
@@ -301,22 +362,39 @@ int shell (int argc, char *argv[]) {
 
 	fprintf(stdout, "%s: ", cwd);
 	while ((s = freadln(stdin))){
-		char *pathResolution = malloc(PATH_MAX*sizeof(char));
-		t = getToks(s); /* break the line into tokens */
-		fundex = lookup(t[0]); /* Is first token a shell literal */
-		if(fundex >= 0) cmd_table[fundex].fun(&t[1]);
+		char *newCommand = malloc(INPUT_STRING_SIZE*sizeof(char));
+		t = getToks(s);			/* break the line into tokens */
+		
+		k = 0;
+		background = 0;
+		while ((t[0][k] != '&') && (t[0][k] != '\0')) {
+			if (t[0][k+1] == '&') background = 1;
+			newCommand[k] = t[0][k];
+			k++;
+		}
+		t[0] = newCommand;
+		if (background == 1) {
+			shiftTokensRight(1,t);
+			t[1] = "&";
+		}
+		fundex = lookup(t[0]);	/* Is first token a shell literal */
+		if(fundex >= 0)	{
+			if ( (sizeof(t)/sizeof(char**) > 1) && (t[1][0] == '&') ) cmd_table[fundex].fun(&t[2]);
+			else cmd_table[fundex].fun(&t[1]);
+			
+		}		
 		else {
 			if (strstr(t[0], "/") != NULL) {	//executable with path defined
 				create_process(t[0], t);
 			}
 			else {					//executable with no path defined
+				char *pathResolution = malloc(PATH_MAX*sizeof(char));
 				k = 0;
 				isExecutable = 0;
 				while ( (paths[k] != NULL) && (isExecutable == 0)) {
 					strcpy(pathResolution, paths[k]);
 					strcat(pathResolution, "/");
-					strcat(pathResolution, t[0]);
-        	  
+        				strcat(pathResolution, t[0]);
 					if (access(pathResolution, F_OK|X_OK) == 0)
 						{isExecutable = 1;}
 					k++;
@@ -328,14 +406,13 @@ int shell (int argc, char *argv[]) {
 				}
 				else {
         	  			fprintf(stdout, "Couldn't resolve path for executable '%s'.\n", t[0]);
-					freeToks(t);
 				}
 			}
 
 		}
 		cwd = getcwd(buf, PATH_MAX);
-		
 		fprintf(stdout, "%s: ", cwd);
+
 	}
   return 0;
 }
